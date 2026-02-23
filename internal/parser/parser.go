@@ -38,8 +38,9 @@ type SessionData struct {
 	Model        string
 	Cwd          string
 	Files        map[string]*FileReadInfo
-	LastUsage    ContextUsage // usage from the most recent assistant message
-	TotalOutput  int          // cumulative output tokens
+	Tools        map[string]int // tool name -> call count
+	LastUsage    ContextUsage   // usage from the most recent assistant message
+	TotalOutput  int            // cumulative output tokens
 }
 
 // jsonlRecord is the top-level JSONL record.
@@ -108,6 +109,7 @@ func ParseReader(r io.Reader) (*SessionData, error) {
 	p := &parser{
 		data: &SessionData{
 			Files: make(map[string]*FileReadInfo),
+			Tools: make(map[string]int),
 		},
 		pendingReads: make(map[string]pendingRead),
 	}
@@ -130,21 +132,22 @@ func ParseReader(r io.Reader) (*SessionData, error) {
 	return p.data, nil
 }
 
-// ParseFromOffset reads JSONL starting at byte offset, returns new reads found.
-func ParseFromOffset(path string, offset int64) ([]*FileReadInfo, int64, error) {
+// ParseFromOffset reads JSONL starting at byte offset, returns new reads and tool counts found.
+func ParseFromOffset(path string, offset int64) ([]*FileReadInfo, map[string]int, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, offset, err
+		return nil, nil, offset, err
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, err
+		return nil, nil, offset, err
 	}
 
 	p := &parser{
 		data: &SessionData{
 			Files: make(map[string]*FileReadInfo),
+			Tools: make(map[string]int),
 		},
 		pendingReads: make(map[string]pendingRead),
 	}
@@ -167,7 +170,7 @@ func ParseFromOffset(path string, offset int64) ([]*FileReadInfo, int64, error) 
 		reads = append(reads, fi)
 	}
 
-	return reads, newOffset, scanner.Err()
+	return reads, p.data.Tools, newOffset, scanner.Err()
 }
 
 func (p *parser) processLine(line []byte) {
@@ -217,7 +220,16 @@ func (p *parser) processAssistant(msgRaw json.RawMessage) {
 	}
 
 	for _, block := range blocks {
-		if block.Type != "tool_use" || block.Name != "Read" {
+		if block.Type != "tool_use" {
+			continue
+		}
+
+		// Count all tool usage
+		if block.Name != "" {
+			p.data.Tools[block.Name]++
+		}
+
+		if block.Name != "Read" {
 			continue
 		}
 
@@ -336,6 +348,9 @@ func ParseWithSubagents(jsonlPath string) (*SessionData, error) {
 				data.Files[path] = fi
 			}
 		}
+		for name, count := range subData.Tools {
+			data.Tools[name] += count
+		}
 	}
 
 	return data, nil
@@ -397,5 +412,12 @@ func (sd *SessionData) MergeReads(reads []*FileReadInfo) {
 		} else {
 			sd.Files[fi.FilePath] = fi
 		}
+	}
+}
+
+// MergeTools merges new tool counts into existing session data.
+func (sd *SessionData) MergeTools(tools map[string]int) {
+	for name, count := range tools {
+		sd.Tools[name] += count
 	}
 }

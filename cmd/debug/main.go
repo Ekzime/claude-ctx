@@ -72,4 +72,10 @@ func main() {
 	fmt.Println(tree)
 
 	fmt.Printf("+%d in %d files\n", data.TotalLines(), len(data.Files))
+
+	// Tool usage
+	if len(data.Tools) > 0 {
+		fmt.Printf("\nTool usage:\n")
+		fmt.Println(ui.RenderTools(data.Tools, 20))
+	}
 }
