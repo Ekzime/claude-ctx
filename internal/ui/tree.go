@@ -171,6 +171,9 @@ func renderNode(sb *strings.Builder, node *treeNode, prefix string, isLast bool,
 		} else {
 			linesStr = linesStyle.Render(fmt.Sprintf("+%d", node.lines))
 		}
+		if node.reads > 1 {
+			linesStr += dimStyle.Render(fmt.Sprintf(" ×%d", node.reads))
+		}
 
 		line := fmt.Sprintf("%s%s%s%s%s %s",
 			styledPrefix, styledConnector, name,
