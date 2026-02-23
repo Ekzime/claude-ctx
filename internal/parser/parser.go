@@ -44,8 +44,9 @@ type SessionData struct {
 
 // jsonlRecord is the top-level JSONL record.
 type jsonlRecord struct {
-	Type string          `json:"type"`
-	Cwd  string          `json:"cwd"`
+	Type    string          `json:"type"`
+	Subtype string          `json:"subtype"`
+	Cwd     string          `json:"cwd"`
 	Message json.RawMessage `json:"message"`
 }
 
@@ -90,6 +91,7 @@ type pendingRead struct {
 type parser struct {
 	data         *SessionData
 	pendingReads map[string]pendingRead // tool_use_id -> pending read info
+	compacted    bool                   // true if compact_boundary was seen
 }
 
 // ParseJSONL parses a JSONL file and returns session data with all Read calls.
@@ -134,6 +136,7 @@ func ParseReader(r io.Reader) (*SessionData, error) {
 type IncrementalResult struct {
 	Reads     []*FileReadInfo
 	Usage     *ContextUsage // non-nil if usage was found in new lines
+	Compacted bool          // true if a compact_boundary was encountered
 	NewOffset int64
 }
 
@@ -180,6 +183,7 @@ func ParseFromOffset(path string, offset int64) (*IncrementalResult, error) {
 
 	result := &IncrementalResult{
 		Reads:     reads,
+		Compacted: p.compacted,
 		NewOffset: newOffset,
 	}
 
@@ -201,6 +205,14 @@ func (p *parser) processLine(line []byte) {
 	// Capture cwd from first record that has it
 	if p.data.Cwd == "" && rec.Cwd != "" {
 		p.data.Cwd = rec.Cwd
+	}
+
+	// On compaction, reset file reads — only keep post-compaction context
+	if rec.Type == "system" && rec.Subtype == "compact_boundary" {
+		p.data.Files = make(map[string]*FileReadInfo)
+		p.pendingReads = make(map[string]pendingRead)
+		p.compacted = true
+		return
 	}
 
 	switch rec.Type {

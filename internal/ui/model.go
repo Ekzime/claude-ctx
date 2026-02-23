@@ -118,6 +118,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case watcher.FileChanged:
 		if m.sessionData != nil {
+			if msg.Compacted {
+				m.sessionData.Files = make(map[string]*parser.FileReadInfo)
+			}
 			m.sessionData.MergeReads(msg.NewReads)
 			if msg.Usage != nil {
 				m.sessionData.LastUsage = *msg.Usage

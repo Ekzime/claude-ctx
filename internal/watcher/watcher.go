@@ -14,8 +14,9 @@ import (
 
 // FileChanged is sent when the JSONL file is updated with new data.
 type FileChanged struct {
-	NewReads []*parser.FileReadInfo
-	Usage    *parser.ContextUsage
+	NewReads  []*parser.FileReadInfo
+	Usage     *parser.ContextUsage
+	Compacted bool // context was compacted, reset file list
 }
 
 // Watcher monitors a JSONL session file for changes.
@@ -120,10 +121,11 @@ func (w *Watcher) checkForUpdates() {
 
 	w.offset = result.NewOffset
 
-	if len(result.Reads) > 0 || result.Usage != nil {
+	if len(result.Reads) > 0 || result.Usage != nil || result.Compacted {
 		w.sendFn(FileChanged{
-			NewReads: result.Reads,
-			Usage:    result.Usage,
+			NewReads:  result.Reads,
+			Usage:     result.Usage,
+			Compacted: result.Compacted,
 		})
 	}
 }
