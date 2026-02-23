@@ -247,6 +247,13 @@ func (m *Model) viewTree() string {
 	sb.WriteString(header)
 	sb.WriteString("\n")
 
+	// Context usage bar
+	contextBar := renderContextBar(m.sessionData, m.width-4)
+	if contextBar != "" {
+		sb.WriteString(contextBar)
+		sb.WriteString("\n")
+	}
+
 	stats := fmt.Sprintf("  %d files · %s lines read",
 		fileCount, formatNumber(totalLines))
 	sb.WriteString(subtitleStyle.Render(stats))

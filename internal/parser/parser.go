@@ -19,12 +19,27 @@ type FileReadInfo struct {
 	TotalLines int // actual file size in lines (0 if file doesn't exist)
 }
 
+// ContextUsage tracks token usage for context indicator.
+type ContextUsage struct {
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+}
+
+// TotalContext returns approximate current context size in tokens.
+func (c ContextUsage) TotalContext() int {
+	return c.InputTokens + c.CacheReadInputTokens + c.CacheCreationInputTokens
+}
+
 // SessionData holds parsed read data for a session.
 type SessionData struct {
-	SessionID string
-	Model     string
-	Cwd       string                   // working directory from session
-	Files     map[string]*FileReadInfo // keyed by file_path
+	SessionID    string
+	Model        string
+	Cwd          string
+	Files        map[string]*FileReadInfo
+	LastUsage    ContextUsage // usage from the most recent assistant message
+	TotalOutput  int          // cumulative output tokens
 }
 
 // jsonlRecord is the top-level JSONL record.
@@ -35,9 +50,17 @@ type jsonlRecord struct {
 }
 
 type messageEnvelope struct {
-	Role    string         `json:"role"`
-	Model   string         `json:"model"`
+	Role    string          `json:"role"`
+	Model   string          `json:"model"`
 	Content json.RawMessage `json:"content"`
+	Usage   *usageData      `json:"usage,omitempty"`
+}
+
+type usageData struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 type toolUseBlock struct {
@@ -174,6 +197,17 @@ func (p *parser) processAssistant(msgRaw json.RawMessage) {
 
 	if p.data.Model == "" && msg.Model != "" {
 		p.data.Model = msg.Model
+	}
+
+	// Capture usage from every assistant message (last one wins)
+	if msg.Usage != nil {
+		p.data.LastUsage = ContextUsage{
+			InputTokens:              msg.Usage.InputTokens,
+			OutputTokens:             msg.Usage.OutputTokens,
+			CacheCreationInputTokens: msg.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     msg.Usage.CacheReadInputTokens,
+		}
+		p.data.TotalOutput += msg.Usage.OutputTokens
 	}
 
 	// content is an array of blocks
