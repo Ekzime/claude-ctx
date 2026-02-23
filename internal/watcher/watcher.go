@@ -21,11 +21,12 @@ type FileChanged struct {
 
 // Watcher monitors a JSONL session file for changes.
 type Watcher struct {
-	jsonlPath   string
-	offset      int64
-	stopCh      chan struct{}
-	sendFn      func(FileChanged)
-	subagentDir string
+	jsonlPath    string
+	offset       int64
+	pendingReads parser.PendingReads
+	stopCh       chan struct{}
+	sendFn       func(FileChanged)
+	subagentDir  string
 }
 
 // New creates a new watcher for the given JSONL path.
@@ -114,12 +115,13 @@ func (w *Watcher) loop(fsw *fsnotify.Watcher) {
 }
 
 func (w *Watcher) checkForUpdates() {
-	result, err := parser.ParseFromOffset(w.jsonlPath, w.offset)
+	result, err := parser.ParseFromOffset(w.jsonlPath, w.offset, w.pendingReads)
 	if err != nil {
 		return
 	}
 
 	w.offset = result.NewOffset
+	w.pendingReads = result.PendingReads
 
 	if len(result.Reads) > 0 || result.Usage != nil || result.Compacted {
 		w.sendFn(FileChanged{

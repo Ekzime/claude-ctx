@@ -72,10 +72,10 @@ type toolUseBlock struct {
 }
 
 type toolResultBlock struct {
-	Type      string `json:"type"`
-	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
-	IsError   bool   `json:"is_error"`
+	Type      string          `json:"type"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
 }
 
 type readInput struct {
@@ -132,16 +132,21 @@ func ParseReader(r io.Reader) (*SessionData, error) {
 	return p.data, nil
 }
 
+// PendingReads is exported state of pending tool_use Read calls awaiting results.
+type PendingReads map[string]pendingRead
+
 // IncrementalResult holds data parsed from new JSONL lines.
 type IncrementalResult struct {
-	Reads     []*FileReadInfo
-	Usage     *ContextUsage // non-nil if usage was found in new lines
-	Compacted bool          // true if a compact_boundary was encountered
-	NewOffset int64
+	Reads        []*FileReadInfo
+	Usage        *ContextUsage // non-nil if usage was found in new lines
+	Compacted    bool          // true if a compact_boundary was encountered
+	NewOffset    int64
+	PendingReads PendingReads // carry over to next incremental parse
 }
 
 // ParseFromOffset reads JSONL starting at byte offset, returns incremental results.
-func ParseFromOffset(path string, offset int64) (*IncrementalResult, error) {
+// pending carries over unresolved Read tool_use calls from previous parse.
+func ParseFromOffset(path string, offset int64, pending PendingReads) (*IncrementalResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -152,11 +157,16 @@ func ParseFromOffset(path string, offset int64) (*IncrementalResult, error) {
 		return nil, err
 	}
 
+	pr := make(map[string]pendingRead)
+	for k, v := range pending {
+		pr[k] = v
+	}
+
 	p := &parser{
 		data: &SessionData{
 			Files: make(map[string]*FileReadInfo),
 		},
-		pendingReads: make(map[string]pendingRead),
+		pendingReads: pr,
 	}
 
 	scanner := bufio.NewScanner(f)
@@ -181,10 +191,17 @@ func ParseFromOffset(path string, offset int64) (*IncrementalResult, error) {
 		reads = append(reads, fi)
 	}
 
+	// Carry over unresolved pending reads for next call
+	pendingOut := make(PendingReads)
+	for k, v := range p.pendingReads {
+		pendingOut[k] = v
+	}
+
 	result := &IncrementalResult{
-		Reads:     reads,
-		Compacted: p.compacted,
-		NewOffset: newOffset,
+		Reads:        reads,
+		Compacted:    p.compacted,
+		NewOffset:    newOffset,
+		PendingReads: pendingOut,
 	}
 
 	// Pass usage if any assistant messages were parsed
@@ -299,22 +316,41 @@ func (p *parser) processUser(msgRaw json.RawMessage) {
 			continue
 		}
 
-		// Count actual lines from the tool result content
-		lines := countContentLines(block.Content)
-		if lines == 0 {
+		// Content can be a string (text files) or array (images).
+		// Try string first.
+		var contentStr string
+		if err := json.Unmarshal(block.Content, &contentStr); err == nil {
+			lines := countContentLines(contentStr)
+			if lines == 0 {
+				continue
+			}
+			fi, exists := p.data.Files[pending.filePath]
+			if !exists {
+				fi = &FileReadInfo{
+					FilePath: pending.filePath,
+				}
+				p.data.Files[pending.filePath] = fi
+			}
+			fi.ReadCount++
+			fi.Lines += lines
 			continue
 		}
 
-		fi, exists := p.data.Files[pending.filePath]
-		if !exists {
-			fi = &FileReadInfo{
-				FilePath: pending.filePath,
-			}
-			p.data.Files[pending.filePath] = fi
+		// Array content (images/screenshots) — track the file with 0 lines
+		var contentBlocks []struct {
+			Type string `json:"type"`
 		}
-
-		fi.ReadCount++
-		fi.Lines += lines
+		if err := json.Unmarshal(block.Content, &contentBlocks); err == nil && len(contentBlocks) > 0 {
+			fi, exists := p.data.Files[pending.filePath]
+			if !exists {
+				fi = &FileReadInfo{
+					FilePath: pending.filePath,
+				}
+				p.data.Files[pending.filePath] = fi
+			}
+			fi.ReadCount++
+			// Lines stays 0 for images — they still consume context
+		}
 	}
 }
 

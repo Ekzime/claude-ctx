@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,7 +28,13 @@ func BuildTree(files []*parser.FileReadInfo, projectPath string) *treeNode {
 		relPath := fi.FilePath
 		if projectPath != "" {
 			if rel, err := filepath.Rel(projectPath, fi.FilePath); err == nil {
-				relPath = rel
+				// If relative path escapes project (starts with ..), use a
+				// shortened absolute path instead (replace home dir with ~).
+				if strings.HasPrefix(rel, "..") {
+					relPath = shortenHome(fi.FilePath)
+				} else {
+					relPath = rel
+				}
 			}
 		}
 
@@ -38,6 +45,18 @@ func BuildTree(files []*parser.FileReadInfo, projectPath string) *treeNode {
 	sortTree(root)
 	collapseTree(root)
 	return root
+}
+
+// shortenHome replaces the user's home directory with ~ for display.
+func shortenHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
 }
 
 func insertNode(parent *treeNode, parts []string, lines, totalLines, reads int) {
@@ -161,7 +180,10 @@ func renderNode(sb *strings.Builder, node *treeNode, prefix string, isLast bool,
 		coloredBar := colorBar(bar, node.lines, maxLines)
 
 		var linesStr string
-		if node.totalLines > 0 {
+		if node.lines == 0 && node.reads > 0 {
+			// Image or binary file — no lines but still in context
+			linesStr = dimStyle.Render("[image]")
+		} else if node.totalLines > 0 {
 			readLines := node.lines
 			if readLines > node.totalLines {
 				readLines = node.totalLines
