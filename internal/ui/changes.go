@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,21 +15,29 @@ func RenderChanges(diff gitdiff.DiffResult, maxBarWidth int) string {
 	var sb strings.Builder
 
 	sb.WriteString(sectionStyle.Render("Changes"))
-	sb.WriteString("\n")
 
 	if !diff.HasGit {
-		sb.WriteString(dimStyle.Render("  Git not initialized"))
+		sb.WriteString("  ")
+		sb.WriteString(dimStyle.Render("git not initialized"))
 		sb.WriteString("\n")
 		return sb.String()
 	}
 
 	if len(diff.Files) == 0 {
-		sb.WriteString(dimStyle.Render("  No changes"))
+		sb.WriteString("  ")
+		sb.WriteString(dimStyle.Render("no changes"))
 		sb.WriteString("\n")
 		return sb.String()
 	}
 
-	// Sort by total changes (added + removed) descending
+	// Summary inline with header
+	totalAdded := addedStyle.Render(fmt.Sprintf("+%d", diff.TotalAdded()))
+	totalRemoved := removedStyle.Render(fmt.Sprintf("-%d", diff.TotalRemoved()))
+	sb.WriteString("  ")
+	sb.WriteString(fmt.Sprintf("%s %s in %d files", totalAdded, totalRemoved, len(diff.Files)))
+	sb.WriteString("\n")
+
+	// Sort by total changes descending
 	files := make([]gitdiff.FileDiff, len(diff.Files))
 	copy(files, diff.Files)
 	sort.Slice(files, func(i, j int) bool {
@@ -46,11 +55,12 @@ func RenderChanges(diff gitdiff.DiffResult, maxBarWidth int) string {
 		}
 	}
 
-	// Find max filename length for alignment
+	// Use short filenames (just basename)
 	maxNameLen := 0
 	for _, f := range files {
-		if len(f.FilePath) > maxNameLen {
-			maxNameLen = len(f.FilePath)
+		name := filepath.Base(f.FilePath)
+		if len(name) > maxNameLen {
+			maxNameLen = len(name)
 		}
 	}
 
@@ -58,23 +68,22 @@ func RenderChanges(diff gitdiff.DiffResult, maxBarWidth int) string {
 	rmBarStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(removedBarColor))
 
 	for _, f := range files {
-		name := fileStyle.Render(f.FilePath)
+		name := filepath.Base(f.FilePath)
+		styledName := fileStyle.Render(name)
 
-		padding := maxNameLen - len(f.FilePath) + 2
+		padding := maxNameLen - len(name) + 2
 		if padding < 2 {
 			padding = 2
 		}
 
 		var parts []string
 
-		// Added bar
 		if f.Added > 0 {
 			bar := barBlock(f.Added, maxChange, maxBarWidth)
 			parts = append(parts, addBarStyle.Render(bar))
 			parts = append(parts, addedStyle.Render(fmt.Sprintf("+%d", f.Added)))
 		}
 
-		// Removed bar
 		if f.Removed > 0 {
 			bar := barBlock(f.Removed, maxChange, maxBarWidth)
 			parts = append(parts, rmBarStyle.Render(bar))
@@ -82,20 +91,13 @@ func RenderChanges(diff gitdiff.DiffResult, maxBarWidth int) string {
 		}
 
 		line := fmt.Sprintf("  %s%s%s",
-			name,
+			styledName,
 			strings.Repeat(" ", padding),
-			strings.Join(parts, "  "))
+			strings.Join(parts, " "))
 
 		sb.WriteString(line)
 		sb.WriteString("\n")
 	}
-
-	// Summary
-	sb.WriteString("\n")
-	totalAdded := addedStyle.Render(fmt.Sprintf("+%d", diff.TotalAdded()))
-	totalRemoved := removedStyle.Render(fmt.Sprintf("-%d", diff.TotalRemoved()))
-	sb.WriteString(fmt.Sprintf("  %s %s in %d files", totalAdded, totalRemoved, len(files)))
-	sb.WriteString("\n")
 
 	return sb.String()
 }

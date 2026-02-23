@@ -3,9 +3,9 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ekz/claude-ctx/internal/gitdiff"
 	"github.com/ekz/claude-ctx/internal/parser"
@@ -90,6 +90,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case diffLoadedMsg:
 		m.diffResult = &msg.diff
+		return m, m.scheduleDiffRefresh()
+
+	case diffTickMsg:
+		if m.state == viewTree {
+			return m, m.loadDiff()
+		}
 		return m, nil
 
 	case watcher.FileChanged:
@@ -237,15 +243,16 @@ func (m *Model) viewTree() string {
 	totalLines := m.sessionData.TotalLines()
 
 	header := titleStyle.Render("claude-ctx") + "  " +
-		dimStyle.Render("·") + "  " +
 		subtitleStyle.Render(model)
 	sb.WriteString(header)
 	sb.WriteString("\n")
 
-	stats := fmt.Sprintf("Files read: %d · Lines: %s",
+	stats := fmt.Sprintf("  %d files · %s lines read",
 		fileCount, formatNumber(totalLines))
 	sb.WriteString(subtitleStyle.Render(stats))
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
+	sb.WriteString(separator(m.width - 4))
+	sb.WriteString("\n")
 
 	if fileCount == 0 {
 		sb.WriteString(dimStyle.Render("  No files read yet. Waiting..."))
@@ -258,29 +265,31 @@ func (m *Model) viewTree() string {
 		}
 		root := BuildTree(files, projectPath)
 
-		barWidth := 20
+		barWidth := 15
 		if m.width > 100 {
-			barWidth = 30
+			barWidth = 25
 		}
 
 		tree := RenderTree(root, barWidth)
 		sb.WriteString(tree)
-
-		sb.WriteString("\n")
-		summary := lipgloss.NewStyle().Foreground(lipgloss.Color("#9ece6a")).Render(
-			fmt.Sprintf("+%s in %d files", formatNumber(totalLines), fileCount))
-		sb.WriteString(summary)
-		sb.WriteString("\n")
 	}
 
 	// Git changes section
 	sb.WriteString("\n")
+	sb.WriteString(separator(m.width - 4))
+	sb.WriteString("\n")
+
 	if m.diffResult != nil {
-		barWidth := 15
+		barWidth := 12
 		if m.width > 100 {
-			barWidth = 20
+			barWidth = 18
 		}
 		sb.WriteString(RenderChanges(*m.diffResult, barWidth))
+	} else {
+		sb.WriteString(sectionStyle.Render("Changes"))
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render("  Loading..."))
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString("\n")
@@ -327,6 +336,15 @@ type sessionLoadedMsg struct {
 // diffLoadedMsg is sent when git diff is computed.
 type diffLoadedMsg struct {
 	diff gitdiff.DiffResult
+}
+
+// diffTickMsg triggers periodic git diff refresh.
+type diffTickMsg struct{}
+
+func (m *Model) scheduleDiffRefresh() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return diffTickMsg{}
+	})
 }
 
 func (m *Model) loadSession() tea.Cmd {

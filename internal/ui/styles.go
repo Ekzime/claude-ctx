@@ -13,19 +13,25 @@ var (
 
 	// Tree styles
 	dirStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7dcfff")).
-			Bold(true)
+			Foreground(lipgloss.Color("#7dcfff"))
 
 	fileStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#c0caf5"))
+			Foreground(lipgloss.Color("#a9b1d6"))
+
+	// Tree connectors - dim so they don't compete with content
+	connectorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#3b4261"))
 
 	// Bar colors - 3 levels: low, medium, high
-	barColorLow  = "#7aa2f7" // blue - small files
-	barColorMid  = "#9ece6a" // green - medium files
+	barColorLow  = "#3d59a1" // dim blue - small files
+	barColorMid  = "#449dab" // teal - medium files
 	barColorHigh = "#ff9e64" // orange - large files
 
 	linesStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#9ece6a"))
+			Foreground(lipgloss.Color("#73daca"))
+
+	totalLinesStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#3b4261"))
 
 	// Session picker styles
 	selectedStyle = lipgloss.NewStyle().
@@ -40,17 +46,19 @@ var (
 
 	// Git diff styles
 	addedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#9ece6a")) // green
+			Foreground(lipgloss.Color("#9ece6a"))
 
 	removedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#f7768e")) // red
+			Foreground(lipgloss.Color("#f7768e"))
 
-	addedBarColor = "#9ece6a"
+	addedBarColor   = "#9ece6a"
 	removedBarColor = "#f7768e"
 
 	sectionStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#bb9af7")) // purple
+			Foreground(lipgloss.Color("#565f89"))
+
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#292e42"))
 
 	// Tree branch chars
 	treeChars = struct {
@@ -61,10 +69,10 @@ var (
 		Space  string
 	}{
 		Pipe:   "│",
-		Tee:    "├──",
-		Corner: "└──",
+		Tee:    "├─",
+		Corner: "└─",
 		Dash:   "─",
-		Space:  "   ",
+		Space:  "  ",
 	}
 )
 
@@ -74,10 +82,9 @@ func barBlock(value, maxValue, maxWidth int) string {
 		return ""
 	}
 
-	// Scale value to bar width
 	width := float64(value) / float64(maxValue) * float64(maxWidth)
-	if width < 1 {
-		width = 1
+	if width < 0.5 {
+		width = 0.5
 	}
 
 	fullBlocks := int(width)
@@ -87,7 +94,7 @@ func barBlock(value, maxValue, maxWidth int) string {
 
 	var bar string
 	for i := 0; i < fullBlocks; i++ {
-		bar += string(blocks[7]) // full block █
+		bar += string(blocks[7])
 	}
 
 	if fraction > 0.125 && fullBlocks < maxWidth {
@@ -112,13 +119,25 @@ func colorBar(bar string, value, maxValue int) string {
 	var color string
 	switch {
 	case ratio > 0.66:
-		color = barColorHigh // orange - large
+		color = barColorHigh
 	case ratio > 0.33:
-		color = barColorMid // green - medium
+		color = barColorMid
 	default:
-		color = barColorLow // blue - small
+		color = barColorLow
 	}
 
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 	return style.Render(bar)
+}
+
+// separator returns a horizontal line.
+func separator(width int) string {
+	if width <= 0 {
+		width = 40
+	}
+	s := ""
+	for i := 0; i < width; i++ {
+		s += "─"
+	}
+	return separatorStyle.Render(s)
 }

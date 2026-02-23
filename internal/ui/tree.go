@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/ekz/claude-ctx/internal/parser"
 )
 
@@ -15,7 +14,7 @@ type treeNode struct {
 	name       string
 	isDir      bool
 	lines      int
-	totalLines int // actual file size (0 if unknown/deleted)
+	totalLines int
 	reads      int
 	children   []*treeNode
 }
@@ -37,6 +36,7 @@ func BuildTree(files []*parser.FileReadInfo, projectPath string) *treeNode {
 	}
 
 	sortTree(root)
+	collapseTree(root)
 	return root
 }
 
@@ -87,10 +87,28 @@ func sortTree(node *treeNode) {
 	}
 }
 
+// collapseTree merges single-child directories: backend/ -> app/ -> cli/ becomes backend/app/cli/
+func collapseTree(node *treeNode) {
+	for i, child := range node.children {
+		if child.isDir && len(child.children) == 1 && child.children[0].isDir {
+			// Merge child into grandchild
+			grandchild := child.children[0]
+			grandchild.name = child.name + "/" + grandchild.name
+			node.children[i] = grandchild
+			// Recurse on the merged node (might collapse further)
+			collapseTree(node)
+			return
+		}
+		if child.isDir {
+			collapseTree(child)
+		}
+	}
+}
+
 // RenderTree renders the file tree with bars as a string.
 func RenderTree(root *treeNode, maxBarWidth int) string {
 	if maxBarWidth <= 0 {
-		maxBarWidth = 20
+		maxBarWidth = 15
 	}
 
 	maxLines := findMaxLines(root)
@@ -105,18 +123,18 @@ func RenderTree(root *treeNode, maxBarWidth int) string {
 	return sb.String()
 }
 
-var (
-	totalLinesStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#565f89"))
-)
-
 func renderNode(sb *strings.Builder, node *treeNode, prefix string, isLast bool, maxLines, maxNameLen, maxBarWidth int) {
-	connector := treeChars.Tee
+	connector := treeChars.Tee + " "
 	if isLast {
-		connector = treeChars.Corner
+		connector = treeChars.Corner + " "
 	}
 
+	// Style the connector dim
+	styledPrefix := connectorStyle.Render(prefix)
+	styledConnector := connectorStyle.Render(connector)
+
 	if node.isDir {
-		line := fmt.Sprintf("%s%s %s", prefix, connector, dirStyle.Render(node.name+"/"))
+		line := fmt.Sprintf("%s%s%s", styledPrefix, styledConnector, dirStyle.Render(node.name+"/"))
 		sb.WriteString(line)
 		sb.WriteString("\n")
 
@@ -124,7 +142,7 @@ func renderNode(sb *strings.Builder, node *treeNode, prefix string, isLast bool,
 		if isLast {
 			childPrefix += treeChars.Space + " "
 		} else {
-			childPrefix += treeChars.Pipe + "  "
+			childPrefix += treeChars.Pipe + " "
 		}
 
 		for i, child := range node.children {
@@ -134,7 +152,7 @@ func renderNode(sb *strings.Builder, node *treeNode, prefix string, isLast bool,
 	} else {
 		name := fileStyle.Render(node.name)
 
-		padding := maxNameLen - visibleLen(node.name, prefix, connector) + 2
+		padding := maxNameLen - rawLen(node.name, prefix, connector) + 2
 		if padding < 2 {
 			padding = 2
 		}
@@ -142,22 +160,20 @@ func renderNode(sb *strings.Builder, node *treeNode, prefix string, isLast bool,
 		bar := barBlock(node.lines, maxLines, maxBarWidth)
 		coloredBar := colorBar(bar, node.lines, maxLines)
 
-		// Format: +190/563 or +190 (if file doesn't exist)
 		var linesStr string
 		if node.totalLines > 0 {
 			readLines := node.lines
 			if readLines > node.totalLines {
 				readLines = node.totalLines
 			}
-			read := linesStyle.Render(fmt.Sprintf("+%d", readLines))
-			total := totalLinesStyle.Render(fmt.Sprintf("/%d", node.totalLines))
-			linesStr = read + total
+			linesStr = linesStyle.Render(fmt.Sprintf("+%d", readLines)) +
+				totalLinesStyle.Render(fmt.Sprintf("/%d", node.totalLines))
 		} else {
 			linesStr = linesStyle.Render(fmt.Sprintf("+%d", node.lines))
 		}
 
-		line := fmt.Sprintf("%s%s %s%s%s  %s",
-			prefix, connector, name,
+		line := fmt.Sprintf("%s%s%s%s%s %s",
+			styledPrefix, styledConnector, name,
 			strings.Repeat(" ", padding),
 			coloredBar, linesStr)
 
@@ -177,7 +193,7 @@ func findMaxLines(node *treeNode) int {
 }
 
 func findMaxNameLen(node *treeNode, depth int) int {
-	nameLen := depth*4 + len(node.name)
+	nameLen := depth*3 + len(node.name)
 	if node.isDir {
 		nameLen++
 	}
@@ -191,6 +207,6 @@ func findMaxNameLen(node *treeNode, depth int) int {
 	return max
 }
 
-func visibleLen(name, prefix, connector string) int {
-	return len(prefix) + len(connector) + 1 + len(name)
+func rawLen(name, prefix, connector string) int {
+	return len(prefix) + len(connector) + len(name)
 }
