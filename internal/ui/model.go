@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ekz/claude-ctx/internal/gitdiff"
 	"github.com/ekz/claude-ctx/internal/parser"
@@ -17,7 +18,14 @@ type viewState int
 
 const (
 	viewPicker viewState = iota
-	viewTree
+	viewTabs
+)
+
+type tabID int
+
+const (
+	tabContext tabID = iota
+	tabChanges
 )
 
 // Model is the main bubbletea model.
@@ -27,6 +35,9 @@ type Model struct {
 	cursor   int
 	scroll   int
 
+	// Tab view
+	activeTab   tabID
+	tabScroll   [2]int // scroll offset per tab
 	sessionData *parser.SessionData
 	diffResult  *gitdiff.DiffResult
 	selected    session.Session
@@ -39,7 +50,6 @@ type Model struct {
 }
 
 // SetProgram stores the program reference for watcher integration.
-// Must be called before p.Run().
 func (m *Model) SetProgram(p *tea.Program) {
 	m.program = p
 }
@@ -55,13 +65,13 @@ func NewModel(sessions []session.Session) *Model {
 // NewModelWithSession creates a model that skips the picker.
 func NewModelWithSession(s session.Session) *Model {
 	return &Model{
-		state:    viewTree,
+		state:    viewTabs,
 		selected: s,
 	}
 }
 
 func (m *Model) Init() tea.Cmd {
-	if m.state == viewTree {
+	if m.state == viewTabs {
 		return m.loadSession()
 	}
 	return nil
@@ -86,14 +96,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startWatcher()
 			}
 		}
-		return m, m.loadDiff()
+		// Load diff if on changes tab
+		if m.activeTab == tabChanges {
+			return m, m.loadDiff()
+		}
+		return m, nil
 
 	case diffLoadedMsg:
 		m.diffResult = &msg.diff
-		return m, m.scheduleDiffRefresh()
+		if m.activeTab == tabChanges {
+			return m, m.scheduleDiffRefresh()
+		}
+		return m, nil
 
 	case diffTickMsg:
-		if m.state == viewTree {
+		if m.state == viewTabs && m.activeTab == tabChanges {
 			return m, m.loadDiff()
 		}
 		return m, nil
@@ -103,8 +120,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessionData.MergeReads(msg.NewReads)
 			m.sessionData.ResolveTotalLines()
 		}
-		// Also refresh git diff
-		return m, m.loadDiff()
+		return m, nil
 	}
 
 	return m, nil
@@ -117,7 +133,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc":
-		if m.state == viewTree {
+		if m.state == viewTabs {
 			m.stopWatcher()
 			m.state = viewPicker
 			m.sessionData = nil
@@ -127,29 +143,72 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.stopWatcher()
 		return m, tea.Quit
 
+	case "tab", "right", "l":
+		if m.state == viewTabs {
+			return m.switchTab(1)
+		}
+
+	case "shift+tab", "left", "h":
+		if m.state == viewTabs {
+			return m.switchTab(-1)
+		}
+
 	case "up", "k":
-		if m.state == viewPicker && m.cursor > 0 {
-			m.cursor--
-			if m.cursor < m.scroll {
-				m.scroll = m.cursor
+		if m.state == viewPicker {
+			if m.cursor > 0 {
+				m.cursor--
+				if m.cursor < m.scroll {
+					m.scroll = m.cursor
+				}
+			}
+		} else if m.state == viewTabs {
+			if m.tabScroll[m.activeTab] > 0 {
+				m.tabScroll[m.activeTab]--
 			}
 		}
 
 	case "down", "j":
-		if m.state == viewPicker && m.cursor < len(m.sessions)-1 {
-			m.cursor++
-			maxVisible := m.maxVisibleSessions()
-			if m.cursor >= m.scroll+maxVisible {
-				m.scroll = m.cursor - maxVisible + 1
+		if m.state == viewPicker {
+			if m.cursor < len(m.sessions)-1 {
+				m.cursor++
+				maxVisible := m.maxVisibleSessions()
+				if m.cursor >= m.scroll+maxVisible {
+					m.scroll = m.cursor - maxVisible + 1
+				}
 			}
+		} else if m.state == viewTabs {
+			m.tabScroll[m.activeTab]++
+			// Clamping happens in render
 		}
 
 	case "enter":
 		if m.state == viewPicker && len(m.sessions) > 0 {
 			m.selected = m.sessions[m.cursor]
-			m.state = viewTree
+			m.state = viewTabs
+			m.activeTab = tabContext
 			return m, m.loadSession()
 		}
+	}
+
+	return m, nil
+}
+
+func (m *Model) switchTab(dir int) (tea.Model, tea.Cmd) {
+	prevTab := m.activeTab
+
+	if dir > 0 {
+		m.activeTab = tabChanges
+	} else {
+		m.activeTab = tabContext
+	}
+
+	if m.activeTab == prevTab {
+		return m, nil
+	}
+
+	// Start polling when switching to Changes
+	if m.activeTab == tabChanges {
+		return m, m.loadDiff()
 	}
 
 	return m, nil
@@ -159,8 +218,8 @@ func (m *Model) View() string {
 	switch m.state {
 	case viewPicker:
 		return m.viewPicker()
-	case viewTree:
-		return m.viewTree()
+	case viewTabs:
+		return m.viewTabbed()
 	}
 	return ""
 }
@@ -214,7 +273,7 @@ func (m *Model) viewPicker() string {
 	return sb.String()
 }
 
-func (m *Model) viewTree() string {
+func (m *Model) viewTabbed() string {
 	var sb strings.Builder
 
 	if m.err != nil {
@@ -233,33 +292,124 @@ func (m *Model) viewTree() string {
 		return sb.String()
 	}
 
-	// Header
+	// === Fixed header ===
 	model := m.sessionData.Model
 	if model == "" {
 		model = "unknown"
 	}
-
-	fileCount := len(m.sessionData.Files)
-	totalLines := m.sessionData.TotalLines()
 
 	header := titleStyle.Render("claude-ctx") + "  " +
 		subtitleStyle.Render(model)
 	sb.WriteString(header)
 	sb.WriteString("\n")
 
-	// Context usage bar
+	// Context bar
 	contextBar := renderContextBar(m.sessionData, m.width-4)
 	if contextBar != "" {
 		sb.WriteString(contextBar)
 		sb.WriteString("\n")
 	}
 
-	stats := fmt.Sprintf("  %d files · %s lines read",
-		fileCount, formatNumber(totalLines))
-	sb.WriteString(subtitleStyle.Render(stats))
+	// Tab bar
+	sb.WriteString(m.renderTabBar())
 	sb.WriteString("\n")
 	sb.WriteString(separator(m.width - 4))
 	sb.WriteString("\n")
+
+	// === Scrollable body ===
+	headerLines := 5 // title + context + tabs + separator + footer
+	footerLines := 2
+	bodyHeight := m.height - headerLines - footerLines
+	if bodyHeight < 5 {
+		bodyHeight = 5
+	}
+
+	var bodyContent string
+	switch m.activeTab {
+	case tabContext:
+		bodyContent = m.renderContextTab()
+	case tabChanges:
+		bodyContent = m.renderChangesTab()
+	}
+
+	// Apply scroll
+	lines := strings.Split(bodyContent, "\n")
+	totalLines := len(lines)
+
+	// Clamp scroll
+	maxScroll := totalLines - bodyHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.tabScroll[m.activeTab] > maxScroll {
+		m.tabScroll[m.activeTab] = maxScroll
+	}
+
+	scrollOff := m.tabScroll[m.activeTab]
+	end := scrollOff + bodyHeight
+	if end > totalLines {
+		end = totalLines
+	}
+
+	visible := lines[scrollOff:end]
+	sb.WriteString(strings.Join(visible, "\n"))
+	sb.WriteString("\n")
+
+	// Scroll indicator
+	if totalLines > bodyHeight {
+		remaining := totalLines - end
+		if remaining > 0 {
+			sb.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more lines", remaining)))
+		} else {
+			sb.WriteString(dimStyle.Render("  ── end ──"))
+		}
+		sb.WriteString("\n")
+	}
+
+	// === Fixed footer ===
+	sb.WriteString("\n")
+	sb.WriteString(dimStyle.Render("  tab: switch · j/k: scroll · esc: back · q: quit"))
+
+	return sb.String()
+}
+
+func (m *Model) renderTabBar() string {
+	tabs := []struct {
+		id   tabID
+		name string
+	}{
+		{tabContext, "Context"},
+		{tabChanges, "Changes"},
+	}
+
+	var parts []string
+	for _, t := range tabs {
+		if t.id == m.activeTab {
+			style := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#7aa2f7")).
+				Background(lipgloss.Color("#292e42")).
+				Padding(0, 1)
+			parts = append(parts, style.Render(t.name))
+		} else {
+			parts = append(parts, dimStyle.Render("  "+t.name+"  "))
+		}
+	}
+
+	hint := dimStyle.Render("(tab to cycle)")
+	return "  " + strings.Join(parts, " ") + "  " + hint
+}
+
+func (m *Model) renderContextTab() string {
+	var sb strings.Builder
+
+	fileCount := len(m.sessionData.Files)
+	totalLines := m.sessionData.TotalLines()
+
+	stats := fmt.Sprintf("  %d files · %s lines read",
+		fileCount, formatNumber(totalLines))
+	sb.WriteString(subtitleStyle.Render(stats))
+	sb.WriteString("\n\n")
 
 	if fileCount == 0 {
 		sb.WriteString(dimStyle.Render("  No files read yet. Waiting..."))
@@ -281,28 +431,20 @@ func (m *Model) viewTree() string {
 		sb.WriteString(tree)
 	}
 
-	// Git changes section
-	sb.WriteString("\n")
-	sb.WriteString(separator(m.width - 4))
-	sb.WriteString("\n")
+	return sb.String()
+}
 
-	if m.diffResult != nil {
-		barWidth := 12
-		if m.width > 100 {
-			barWidth = 18
-		}
-		sb.WriteString(RenderChanges(*m.diffResult, barWidth))
-	} else {
-		sb.WriteString(sectionStyle.Render("Changes"))
-		sb.WriteString("\n")
-		sb.WriteString(dimStyle.Render("  Loading..."))
-		sb.WriteString("\n")
+func (m *Model) renderChangesTab() string {
+	if m.diffResult == nil {
+		return dimStyle.Render("  Loading git diff...")
 	}
 
-	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render("  esc: back · q: quit"))
+	barWidth := 12
+	if m.width > 100 {
+		barWidth = 18
+	}
 
-	return sb.String()
+	return RenderChanges(*m.diffResult, barWidth)
 }
 
 func (m *Model) startWatcher() {
@@ -364,7 +506,6 @@ func (m *Model) loadSession() tea.Cmd {
 
 func (m *Model) loadDiff() tea.Cmd {
 	projectPath := m.selected.ProjectPath
-	// Fallback to cwd from JSONL if projectPath is empty
 	if projectPath == "" && m.sessionData != nil && m.sessionData.Cwd != "" {
 		projectPath = m.sessionData.Cwd
 	}
