@@ -12,10 +12,10 @@ import (
 	"github.com/ekz/claude-ctx/internal/parser"
 )
 
-// FileChanged is sent when the JSONL file is updated with new tool calls.
+// FileChanged is sent when the JSONL file is updated with new data.
 type FileChanged struct {
 	NewReads []*parser.FileReadInfo
-	NewTools map[string]int
+	Usage    *parser.ContextUsage
 }
 
 // Watcher monitors a JSONL session file for changes.
@@ -113,15 +113,18 @@ func (w *Watcher) loop(fsw *fsnotify.Watcher) {
 }
 
 func (w *Watcher) checkForUpdates() {
-	reads, tools, newOffset, err := parser.ParseFromOffset(w.jsonlPath, w.offset)
+	result, err := parser.ParseFromOffset(w.jsonlPath, w.offset)
 	if err != nil {
 		return
 	}
 
-	w.offset = newOffset
+	w.offset = result.NewOffset
 
-	if len(reads) > 0 || len(tools) > 0 {
-		w.sendFn(FileChanged{NewReads: reads, NewTools: tools})
+	if len(result.Reads) > 0 || result.Usage != nil {
+		w.sendFn(FileChanged{
+			NewReads: result.Reads,
+			Usage:    result.Usage,
+		})
 	}
 }
 

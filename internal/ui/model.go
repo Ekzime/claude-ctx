@@ -26,7 +26,6 @@ type tabID int
 const (
 	tabContext tabID = iota
 	tabChanges
-	tabTools
 	tabCount // total number of tabs
 )
 
@@ -120,7 +119,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watcher.FileChanged:
 		if m.sessionData != nil {
 			m.sessionData.MergeReads(msg.NewReads)
-			m.sessionData.MergeTools(msg.NewTools)
+			if msg.Usage != nil {
+				m.sessionData.LastUsage = *msg.Usage
+			}
 			m.sessionData.ResolveTotalLines()
 		}
 		return m, nil
@@ -335,8 +336,6 @@ func (m *Model) viewTabbed() string {
 		bodyContent = m.renderContextTab()
 	case tabChanges:
 		bodyContent = m.renderChangesTab()
-	case tabTools:
-		bodyContent = m.renderToolsTab()
 	}
 
 	// Apply scroll
@@ -387,7 +386,6 @@ func (m *Model) renderTabBar() string {
 	}{
 		{tabContext, "Context"},
 		{tabChanges, "Changes"},
-		{tabTools, "Tools"},
 	}
 
 	var parts []string
@@ -424,9 +422,9 @@ func (m *Model) renderContextTab() string {
 		sb.WriteString("\n")
 	} else {
 		files := m.sessionData.SortedFiles()
-		projectPath := m.selected.ProjectPath
-		if projectPath == "" && m.sessionData.Cwd != "" {
-			projectPath = m.sessionData.Cwd
+		projectPath := m.sessionData.Cwd
+		if projectPath == "" {
+			projectPath = m.selected.ProjectPath
 		}
 		root := BuildTree(files, projectPath)
 
@@ -440,19 +438,6 @@ func (m *Model) renderContextTab() string {
 	}
 
 	return sb.String()
-}
-
-func (m *Model) renderToolsTab() string {
-	if m.sessionData == nil || len(m.sessionData.Tools) == 0 {
-		return dimStyle.Render("  No tool calls yet.")
-	}
-
-	barWidth := 15
-	if m.width > 100 {
-		barWidth = 25
-	}
-
-	return RenderTools(m.sessionData.Tools, barWidth)
 }
 
 func (m *Model) renderChangesTab() string {
@@ -526,9 +511,12 @@ func (m *Model) loadSession() tea.Cmd {
 }
 
 func (m *Model) loadDiff() tea.Cmd {
-	projectPath := m.selected.ProjectPath
-	if projectPath == "" && m.sessionData != nil && m.sessionData.Cwd != "" {
+	projectPath := ""
+	if m.sessionData != nil && m.sessionData.Cwd != "" {
 		projectPath = m.sessionData.Cwd
+	}
+	if projectPath == "" {
+		projectPath = m.selected.ProjectPath
 	}
 	return func() tea.Msg {
 		diff := gitdiff.GetDiff(projectPath)
